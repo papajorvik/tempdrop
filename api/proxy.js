@@ -2,11 +2,12 @@ import crypto from 'node:crypto';
 
 const MAILTM_BASE = 'https://api.mail.tm';
 const ALGORITHM = 'aes-256-gcm';
+const BUILD_VERSION = '2026-10-04-v4-diag';
 
 // Common HTTP headers for Mail.tm API requests
 const MAILTM_HEADERS = {
   'Content-Type': 'application/json',
-  'Accept': 'application/json',
+  'Accept': 'application/ld+json, application/json;q=0.9, */*;q=0.8',
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
 };
 
@@ -35,7 +36,7 @@ function logMailtmError(method, url, status, responseBody, sanitizedPayload) {
     method,
     url,
     status,
-    responseBody: responseBody ? responseBody.slice(0, 1000) : '(empty response body)',
+    responseBody: responseBody ? responseBody.slice(0, 1000) : '(empty body)',
     sanitizedPayload: safePayload
   });
 }
@@ -163,40 +164,118 @@ async function getAvailableDomains(forceRefresh = false) {
     return cachedDomains;
   }
 
+  const domainsUrl = `${MAILTM_BASE}/domains`;
+  let res;
+  let bodyText = '';
+  let contentType = '';
+
   try {
-    const res = await fetch(`${MAILTM_BASE}/domains`, {
+    res = await fetch(domainsUrl, {
       headers: {
-        'Accept': 'application/json',
+        'Accept': 'application/ld+json, application/json;q=0.9, */*;q=0.8',
         'User-Agent': MAILTM_HEADERS['User-Agent']
       }
     });
 
-    if (!res.ok) {
-      const errText = await res.text();
-      logMailtmError('GET', `${MAILTM_BASE}/domains`, res.status, errText, {});
-      throw new Error(`Mail.tm /domains returned HTTP ${res.status}: ${errText}`);
-    }
+    contentType = res.headers.get('content-type') || '(none)';
+    bodyText = await res.text();
 
-    const data = await res.json();
-    // Handle both plain JSON array and hydra:member collection
-    const members = Array.isArray(data) ? data : (data['hydra:member'] || data.member || []);
-
-    // Filter strictly for active, non-private domains
-    const active = members
-      .filter(d => d.isActive !== false && d.isPrivate !== true)
-      .map(d => d.domain.toLowerCase().trim());
-
-    if (active.length > 0) {
-      cachedDomains = active;
-      lastDomainsFetch = now;
-      return cachedDomains;
-    }
-  } catch (err) {
-    console.error('Error fetching domains from Mail.tm:', err.message);
-    if (forceRefresh) throw err;
+    // Required Diagnostic Logging: ONLY log requestUrl, httpStatus, contentType, bodyLength, bodyPreview
+    console.log('[Mail.tm /domains Diagnostic]', {
+      requestUrl: domainsUrl,
+      httpStatus: res.status,
+      contentType: contentType,
+      bodyLength: bodyText.length,
+      bodyPreview: bodyText.slice(0, 500)
+    });
+  } catch (netErr) {
+    console.error('[Mail.tm /domains Network Error]', {
+      requestUrl: domainsUrl,
+      error: netErr.message
+    });
+    throw netErr;
   }
 
-  if (cachedDomains.length > 0) return cachedDomains;
+  if (!res.ok && res.status >= 500) {
+    // Retry once after 600ms on 5xx
+    try {
+      await new Promise(r => setTimeout(r, 600));
+      const retryRes = await fetch(domainsUrl, {
+        headers: {
+          'Accept': 'application/ld+json, application/json;q=0.9, */*;q=0.8',
+          'User-Agent': MAILTM_HEADERS['User-Agent']
+        }
+      });
+      const retryType = retryRes.headers.get('content-type') || '(none)';
+      const retryBody = await retryRes.text();
+
+      console.log('[Mail.tm /domains Retry Diagnostic]', {
+        requestUrl: domainsUrl,
+        httpStatus: retryRes.status,
+        contentType: retryType,
+        bodyLength: retryBody.length,
+        bodyPreview: retryBody.slice(0, 500)
+      });
+
+      if (retryRes.ok) {
+        res = retryRes;
+        contentType = retryType;
+        bodyText = retryBody;
+      }
+    } catch (retryErr) {
+      console.error('[Mail.tm /domains Retry Network Error]', retryErr.message);
+    }
+  }
+
+  if (!res.ok) {
+    if (cachedDomains.length > 0) {
+      console.warn(`[Mail.tm /domains HTTP ${res.status}] Fallback to cached active domains:`, cachedDomains);
+      return cachedDomains;
+    }
+    const error = new Error(`Mail.tm /domains returned HTTP ${res.status}: ${bodyText.slice(0, 500) || '(empty body)'}`);
+    error.status = res.status;
+    error.details = bodyText.slice(0, 500) || '(empty body)';
+    error.isMailtmError = true;
+    error.diagnostic = {
+      requestUrl: domainsUrl,
+      httpStatus: res.status,
+      contentType: contentType,
+      bodyLength: bodyText.length,
+      bodyPreview: bodyText.slice(0, 500)
+    };
+    throw error;
+  }
+
+  let data;
+  try {
+    data = JSON.parse(bodyText);
+  } catch (parseErr) {
+    console.error('Failed to parse Mail.tm /domains response as JSON:', parseErr.message, 'Raw body preview:', bodyText.slice(0, 500));
+    const error = new Error(`Failed to parse Mail.tm /domains JSON: ${parseErr.message}`);
+    error.status = 502;
+    error.details = bodyText.slice(0, 500);
+    throw error;
+  }
+
+  // Requirement 5: Support BOTH Hydra format ({ "hydra:member": [...] }) and plain array format ([...])
+  let members = [];
+  if (Array.isArray(data)) {
+    members = data;
+  } else if (data && typeof data === 'object') {
+    members = data['hydra:member'] || data.member || data.domains || [];
+  }
+
+  // Filter strictly for active, non-private domains
+  const active = members
+    .filter(d => d && d.domain && d.isActive !== false && d.isPrivate !== true)
+    .map(d => String(d.domain).toLowerCase().trim());
+
+  if (active.length > 0) {
+    cachedDomains = active;
+    lastDomainsFetch = now;
+    return cachedDomains;
+  }
+
   throw new Error('No active domains currently available from Mail.tm');
 }
 
@@ -283,6 +362,9 @@ async function ensureSessionToken(session) {
  * Main API Handler (Serverless & Node HTTP Server compatible)
  */
 export default async function handler(req, res) {
+  // Identify build version in response headers
+  res.setHeader('X-TempDrop-Build', BUILD_VERSION);
+
   // CORS & credentials handling
   const origin = req.headers?.origin;
   if (origin) {
@@ -311,6 +393,38 @@ export default async function handler(req, res) {
 
   try {
     // -------------------------------------------------------------
+    // Diagnostic Action: Inspect /domains directly
+    // -------------------------------------------------------------
+    if (action === 'diagnostic' || action === 'check_domains') {
+      const domainsUrl = `${MAILTM_BASE}/domains`;
+      const resProbe = await fetch(domainsUrl, {
+        headers: {
+          'Accept': 'application/ld+json, application/json;q=0.9, */*;q=0.8',
+          'User-Agent': MAILTM_HEADERS['User-Agent']
+        }
+      });
+      const cType = resProbe.headers.get('content-type') || '(none)';
+      const bText = await resProbe.text();
+
+      console.log('[Mail.tm /domains Diagnostic]', {
+        requestUrl: domainsUrl,
+        httpStatus: resProbe.status,
+        contentType: cType,
+        bodyLength: bText.length,
+        bodyPreview: bText.slice(0, 500)
+      });
+
+      return res.status(200).json({
+        build: BUILD_VERSION,
+        requestUrl: domainsUrl,
+        httpStatus: resProbe.status,
+        contentType: cType,
+        bodyLength: bText.length,
+        bodyPreview: bText.slice(0, 500)
+      });
+    }
+
+    // -------------------------------------------------------------
     // Action 1: Get or generate email address
     // -------------------------------------------------------------
     if (action === 'get_email_address') {
@@ -332,10 +446,24 @@ export default async function handler(req, res) {
       }
 
       // Step 1: Force refresh active domains directly from GET /domains
-      const availableDomains = await getAvailableDomains(true);
+      let availableDomains;
+      try {
+        availableDomains = await getAvailableDomains(true);
+      } catch (err) {
+        if (err.status >= 500 || err.isMailtmError) {
+          return res.status(502).json({
+            error: 'Mail provider temporarily unavailable. Please try again.',
+            details: err.details || null,
+            diagnostic: err.diagnostic || null,
+            build: BUILD_VERSION
+          });
+        }
+        throw err;
+      }
       if (!availableDomains || availableDomains.length === 0) {
         return res.status(502).json({
-          error: 'Mail provider has no active domains available. Please try again later.'
+          error: 'Mail provider has no active domains available. Please try again later.',
+          build: BUILD_VERSION
         });
       }
       const domain = availableDomains[0];
@@ -357,7 +485,8 @@ export default async function handler(req, res) {
         if (err.status >= 500) {
           return res.status(502).json({
             error: 'Mail provider temporarily unavailable. Please try again.',
-            details: err.details || null
+            details: err.details || null,
+            diagnostic: err.diagnostic || null
           });
         }
         throw err;
@@ -406,7 +535,20 @@ export default async function handler(req, res) {
       }
 
       // Validate selected domain against freshly verified active domains
-      const availableDomains = await getAvailableDomains(true);
+      let availableDomains;
+      try {
+        availableDomains = await getAvailableDomains(true);
+      } catch (err) {
+        if (err.status >= 500 || err.isMailtmError) {
+          return res.status(502).json({
+            error: 'Mail provider temporarily unavailable. Please try again.',
+            details: err.details || null,
+            diagnostic: err.diagnostic || null,
+            build: BUILD_VERSION
+          });
+        }
+        throw err;
+      }
       let domain = requestedDomain;
       if (!domain || !availableDomains.includes(domain)) {
         if (domain && !availableDomains.includes(domain)) {
@@ -431,7 +573,8 @@ export default async function handler(req, res) {
         if (err.status >= 500) {
           return res.status(502).json({
             error: 'Mail provider temporarily unavailable. Please try again.',
-            details: err.details || null
+            details: err.details || null,
+            diagnostic: err.diagnostic || null
           });
         }
         throw err;
@@ -650,20 +793,15 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: `Unsupported action: ${action}` });
   } catch (err) {
     console.error('Mail.tm proxy error:', err.message);
-    if (err.status >= 500 || (err.message && err.message.includes('(500)'))) {
-      return res.status(502).json({
-        error: 'Mail provider temporarily unavailable. Please try again.',
-        details: err.details || null
-      });
-    }
-    if (err.status === 429) {
-      return res.status(429).json({
-        error: 'Mail provider rate limit reached. Please wait a moment and try again.'
-      });
-    }
-    return res.status(err.status || 500).json({
-      error: err.message || 'Internal proxy error',
-      details: err.details || null
+    const statusCode = err.status >= 500 || (err.message && err.message.includes('(500)')) ? 502 : (err.status || 500);
+    return res.status(statusCode).json({
+      error: err.status >= 500 || (err.message && err.message.includes('(500)'))
+        ? 'Mail provider temporarily unavailable. Please try again.'
+        : (err.message || 'Internal proxy error'),
+      status: err.status || statusCode,
+      details: err.details || null,
+      diagnostic: err.diagnostic || null,
+      build: BUILD_VERSION
     });
   }
 }
