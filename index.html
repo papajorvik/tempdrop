@@ -2,7 +2,13 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="theme-color" content="#f6f5f4" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0a0d16" media="(prefers-color-scheme: dark)">
+  <meta name="format-detection" content="telephone=no">
   <title>TempDrop Mail — Fast, Anonymous Temporary Email</title>
   <meta name="description" content="Instant anonymous temporary disposable email with a clean, modern mailbox interface.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -74,6 +80,13 @@
 
       --sidebar-width: 245px;
       --inbox-width: 400px;
+
+      /* Mobile Safe Area & Navigation Metrics */
+      --sat: env(safe-area-inset-top, 0px);
+      --sab: env(safe-area-inset-bottom, 0px);
+      --sal: env(safe-area-inset-left, 0px);
+      --sar: env(safe-area-inset-right, 0px);
+      --mob-nav-height: 56px;
     }
 
     /* ==========================================================================
@@ -2195,31 +2208,55 @@
       white-space: nowrap;
     }
 
+    /* Desktop defaults for mobile components */
+    .mobile-mailbox-card {
+      display: none;
+    }
+    .mobile-bottom-nav {
+      display: none;
+    }
+    .sidebar-mobile-close {
+      display: none;
+    }
+
     /* ==========================================================================
        RESPONSIVE BREAKPOINTS (Mobile & Tablet)
        ========================================================================== */
     @media (max-width: 1024px) {
       :root {
         --sidebar-width: 230px;
-        --inbox-width: 380px;
+        --inbox-width: 370px;
       }
     }
 
     @media (max-width: 768px) {
       body {
-        overflow: auto;
+        overflow: hidden;
+        height: 100vh;
+        height: 100dvh;
+        -webkit-touch-callout: none;
       }
 
       .mobile-header {
         display: flex;
+        height: calc(56px + var(--sat));
+        padding: var(--sat) calc(14px + var(--sar)) 0 calc(14px + var(--sal));
+        background: var(--bg-sidebar);
+        border-bottom: 1px solid var(--border-color);
+        backdrop-filter: blur(16px);
+        -webkit-backdrop-filter: blur(16px);
+        z-index: 30;
       }
 
       .app-container {
-        display: block;
-        height: auto;
-        min-height: 100vh;
-        padding-top: 56px;
+        display: flex;
+        flex-direction: column;
+        height: 100vh;
+        height: 100dvh;
+        width: 100vw;
+        padding-top: calc(56px + var(--sat));
         position: relative;
+        overflow: hidden;
       }
 
       /* Sidebar turns into off-canvas drawer */
@@ -2228,10 +2265,14 @@
         top: 0;
         bottom: 0;
         left: 0;
-        width: 280px;
+        width: min(320px, 86vw);
+        padding-top: calc(16px + var(--sat));
+        padding-bottom: calc(16px + var(--sab));
+        padding-left: calc(16px + var(--sal));
+        padding-right: 16px;
         transform: translateX(-100%);
         transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
-        z-index: 50;
+        z-index: 70;
         box-shadow: var(--shadow-lg);
       }
 
@@ -2239,48 +2280,502 @@
         transform: translateX(0);
       }
 
-      /* Inbox Column takes full width */
-      .inbox-column {
-        width: 100%;
-        height: calc(100vh - 56px);
+      .sidebar-brand {
         display: flex;
+        align-items: center;
+        justify-content: space-between;
       }
 
-      /* Content Column hidden by default on mobile until email selected */
+      .sidebar-mobile-close {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 32px;
+        height: 32px;
+        border-radius: var(--radius-md);
+        background: var(--bg-subtle);
+        border: 1px solid var(--border-color);
+        color: var(--text-secondary);
+        cursor: pointer;
+        margin-left: auto;
+        transition: all 0.15s ease;
+      }
+      .sidebar-mobile-close:hover {
+        background: var(--bg-hover);
+        color: var(--text-primary);
+      }
+
+      /* Inbox Column takes full width with bottom nav spacing */
+      .inbox-column {
+        width: 100%;
+        height: calc(100vh - 56px - var(--sat) - var(--mob-nav-height) - var(--sab));
+        height: calc(100dvh - 56px - var(--sat) - var(--mob-nav-height) - var(--sab));
+        display: flex;
+        flex-direction: column;
+        border-right: none;
+        overflow: hidden;
+      }
+
+      .inbox-header-section {
+        padding: 10px 14px 10px;
+        gap: 10px;
+      }
+
+      .inbox-title-row {
+        gap: 8px;
+      }
+
+      .inbox-sync-text {
+        display: none;
+      }
+      .inbox-sync-indicator {
+        padding: 4px 6px;
+      }
+
+      /* Mobile Mailbox Card */
+      .mobile-mailbox-card {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        background: var(--bg-subtle);
+        border: 1px solid var(--border-color);
+        border-radius: var(--radius-lg);
+        padding: 10px 12px;
+        box-shadow: var(--shadow-xs);
+        transition: border-color 0.2s ease, background-color 0.2s ease;
+      }
+
+      .mobile-card-top {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+
+      .mobile-card-badge {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 11px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--purple-700);
+      }
+      [data-theme="dark"] .mobile-card-badge {
+        color: var(--purple-300);
+      }
+
+      .mobile-card-expiry {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        font-size: 11px;
+        color: var(--text-muted);
+        font-variant-numeric: tabular-nums;
+      }
+      .mobile-card-expiry strong {
+        color: var(--text-primary);
+        font-weight: 700;
+      }
+
+      .mobile-card-address-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .mobile-card-addr-box {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        background: var(--bg-panel);
+        border: 1px solid var(--border-color);
+        border-radius: var(--radius-md);
+        padding: 7px 10px;
+        cursor: pointer;
+        user-select: all;
+        -webkit-user-select: all;
+        transition: border-color 0.15s ease, background-color 0.15s ease;
+      }
+      .mobile-card-addr-box:active {
+        background: var(--bg-hover);
+        border-color: var(--purple-400);
+      }
+
+      .mobile-addr-icon {
+        color: var(--purple-600);
+        flex-shrink: 0;
+      }
+
+      .mobile-addr-text {
+        font-size: 13.5px;
+        font-weight: 600;
+        color: var(--text-primary);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        font-family: inherit;
+        letter-spacing: -0.01em;
+      }
+
+      .mobile-card-copy-btn {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        background: var(--purple-600);
+        color: #ffffff;
+        border: 1px solid var(--purple-600);
+        border-radius: var(--radius-md);
+        padding: 7px 12px;
+        font-size: 12.5px;
+        font-weight: 600;
+        cursor: pointer;
+        flex-shrink: 0;
+        transition: all 0.15s ease;
+      }
+      .mobile-card-copy-btn:active {
+        transform: scale(0.97);
+      }
+      .mobile-card-copy-btn.copied {
+        background: var(--color-green);
+        border-color: var(--color-green);
+      }
+
+      .mobile-card-progress-track {
+        height: 3px;
+        background: var(--border-subtle);
+        border-radius: var(--radius-full);
+        overflow: hidden;
+      }
+
+      .mobile-card-progress-fill {
+        height: 100%;
+        background: linear-gradient(90deg, var(--purple-500), var(--purple-600));
+        border-radius: var(--radius-full);
+        width: 100%;
+        transition: width 1s linear;
+      }
+
+      .mobile-card-actions {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .mobile-card-action-btn {
+        flex: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 4px;
+        font-size: 11.5px;
+        font-weight: 600;
+        color: var(--text-secondary);
+        background: var(--bg-panel);
+        border: 1px solid var(--border-color);
+        border-radius: var(--radius-sm);
+        padding: 5px 6px;
+        cursor: pointer;
+        transition: all 0.15s ease;
+      }
+      .mobile-card-action-btn:active {
+        background: var(--bg-hover);
+        color: var(--purple-700);
+        border-color: var(--purple-300);
+      }
+
+      /* Mobile Email List */
+      .email-list-wrap {
+        flex: 1;
+        min-height: 0;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+        overscroll-behavior-y: contain;
+      }
+
+      .email-row {
+        padding: 12px 14px;
+        gap: 10px;
+      }
+
+      .email-row:active {
+        background: var(--bg-hover);
+      }
+
+      .inbox-footer-bar {
+        padding: 6px 14px;
+        font-size: 11px;
+      }
+
+      /* Mobile Bottom Navigation Bar */
+      .mobile-bottom-nav {
+        display: flex;
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        height: calc(var(--mob-nav-height) + var(--sab));
+        padding-bottom: var(--sab);
+        background: var(--bg-sidebar);
+        border-top: 1px solid var(--border-color);
+        backdrop-filter: blur(16px);
+        -webkit-backdrop-filter: blur(16px);
+        z-index: 35;
+        align-items: center;
+        justify-content: space-around;
+        box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.04);
+        transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+      }
+
+      body.mobile-detail-open .mobile-bottom-nav {
+        transform: translateY(100%);
+        pointer-events: none;
+      }
+
+      .mobile-nav-btn {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 2px;
+        background: transparent;
+        border: none;
+        color: var(--text-muted);
+        font-size: 10.5px;
+        font-weight: 500;
+        height: 100%;
+        cursor: pointer;
+        position: relative;
+        touch-action: manipulation;
+        transition: color 0.15s ease;
+      }
+
+      .mobile-nav-btn:active {
+        transform: scale(0.95);
+      }
+
+      .mobile-nav-btn.active {
+        color: var(--purple-600);
+        font-weight: 700;
+      }
+
+      .mobile-nav-icon-wrap {
+        position: relative;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .mobile-nav-badge {
+        position: absolute;
+        top: -4px;
+        right: -9px;
+        font-size: 9.5px;
+        font-weight: 700;
+        line-height: 1;
+        padding: 2px 4px;
+        border-radius: var(--radius-full);
+        background: var(--purple-600);
+        color: #ffffff;
+        min-width: 14px;
+        text-align: center;
+      }
+
+      .mobile-nav-center-action {
+        flex: 0 0 54px;
+      }
+
+      .mobile-nav-fab {
+        width: 38px;
+        height: 38px;
+        border-radius: 50%;
+        background: linear-gradient(135deg, var(--purple-500), var(--purple-700));
+        color: #ffffff;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: 0 3px 10px rgba(124, 58, 237, 0.4);
+        transition: transform 0.15s ease, box-shadow 0.15s ease;
+      }
+
+      .mobile-nav-center-action:active .mobile-nav-fab {
+        transform: scale(0.92);
+        box-shadow: 0 1px 4px rgba(124, 58, 237, 0.3);
+      }
+
+      /* Content Column (Email Detail) on Mobile */
       .content-column {
         position: fixed;
-        inset: 56px 0 0 0;
-        z-index: 25;
+        inset: 0;
+        z-index: 60;
         background: var(--bg-panel);
         display: none;
-        height: calc(100vh - 56px);
+        height: 100vh;
+        height: 100dvh;
+        padding-top: var(--sat);
+        padding-bottom: var(--sab);
+        padding-left: var(--sal);
+        padding-right: var(--sar);
+        border: none;
       }
 
       .content-column.open-on-mobile {
         display: flex;
+        flex-direction: column;
+      }
+
+      .detail-toolbar {
+        padding: 8px 12px;
+        gap: 6px;
+        overflow-x: auto;
+        scrollbar-width: none;
+        -webkit-overflow-scrolling: touch;
+      }
+      .detail-toolbar::-webkit-scrollbar {
+        display: none;
+      }
+
+      .detail-toolbar-left {
+        gap: 6px;
+        flex-shrink: 0;
+      }
+      .detail-toolbar-right {
+        gap: 6px;
+        flex-shrink: 0;
       }
 
       .mobile-back-btn {
         display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 12px;
+        background: var(--purple-50);
+        border: 1px solid var(--purple-200);
+        border-radius: var(--radius-full);
+        color: var(--purple-700);
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+        flex-shrink: 0;
+      }
+      [data-theme="dark"] .mobile-back-btn {
+        background: var(--purple-50);
+        color: var(--purple-300);
+        border-color: var(--purple-200);
       }
 
-      .detail-toolbar {
-        padding: 10px 14px;
+      .detail-toolbar .toolbar-btn span {
+        display: none;
+      }
+      .detail-toolbar .toolbar-btn {
+        min-width: 36px;
+        width: 36px;
+        height: 36px;
+        padding: 0;
+        justify-content: center;
+        border-radius: var(--radius-md);
       }
 
       .detail-content-scroll {
-        padding: 16px 18px 36px;
+        padding: 14px 14px calc(24px + var(--sab));
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
       }
 
       .email-subject-heading {
-        font-size: 18px;
+        font-size: 17px;
+        line-height: 1.35;
+        word-break: break-word;
       }
 
+      .email-meta-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 8px;
+      }
+
+      .email-date-badge {
+        align-self: flex-start;
+      }
+
+      .email-plain-body, .email-body-wrapper {
+        word-break: break-word;
+        overflow-wrap: anywhere;
+      }
+      .email-body-wrapper img, .email-iframe-container {
+        max-width: 100% !important;
+      }
+      .email-body-wrapper table {
+        max-width: 100% !important;
+        display: block;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+      }
+
+      /* Toasts on mobile: positioned at top */
       .toast-container {
-        left: 16px;
-        right: 16px;
-        bottom: 16px;
+        top: calc(64px + var(--sat));
+        bottom: auto;
+        left: 14px;
+        right: 14px;
         align-items: center;
+      }
+      .toast-pill {
+        max-width: 90vw;
+      }
+    }
+
+    /* Small phone screens (<= 480px) */
+    @media (max-width: 480px) {
+      .mobile-header-brand {
+        font-size: 15px;
+      }
+      .mobile-card-actions {
+        flex-wrap: wrap;
+      }
+      .mobile-card-action-btn {
+        flex: 1 1 30%;
+        padding: 6px 4px;
+      }
+
+      /* Modals: bottom sheet */
+      .modal-backdrop {
+        align-items: flex-end;
+        padding: 0;
+      }
+      .modal-window {
+        width: 100%;
+        max-width: 100%;
+        border-radius: 20px 20px 0 0;
+        padding: 20px 16px calc(20px + var(--sab));
+        max-height: 90vh;
+        max-height: 90dvh;
+        animation: modalSheetIn 0.24s cubic-bezier(0.16, 1, 0.3, 1) both;
+      }
+      @keyframes modalSheetIn {
+        from { transform: translateY(100%); }
+        to { transform: translateY(0); }
+      }
+
+      .input-field-group input,
+      .input-field-group select,
+      .search-input {
+        font-size: 16px !important;
+      }
+
+      .custom-input-wrap {
+        flex-direction: column;
+      }
+      .custom-domain-picker {
+        border-left: none;
+        border-top: 1px solid var(--border-color);
+        width: 100%;
+      }
+      .custom-domain-select {
+        width: 100%;
       }
     }
   </style>
@@ -2296,8 +2791,14 @@
         <line x1="3" y1="18" x2="21" y2="18"></line>
       </svg>
     </button>
-    <div class="mobile-header-brand">
-      <span>Temp</span>Drop Mail
+    <div class="mobile-header-brand" onclick="window.scrollTo({top:0,behavior:'smooth'})" role="button" tabindex="0">
+      <div class="brand-icon-wrap" style="width:26px;height:26px;border-radius:6px;">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 2.69l5.66 5.66a8 8 0 1 1-11.31 0z"></path>
+          <polyline points="8 13.5 12 16.5 16 13.5"></polyline>
+        </svg>
+      </div>
+      <span>Temp<span style="color:var(--purple-600)">Drop</span> Mail</span>
     </div>
     <div class="mobile-header-actions">
       <button class="icon-btn" onclick="toggleTheme()" id="mobile-theme-btn" title="Toggle Theme" aria-label="Toggle Theme">
@@ -2305,14 +2806,14 @@
           <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
         </svg>
       </button>
-      <button class="icon-btn" onclick="refreshInbox()" title="Refresh">
+      <button class="icon-btn" onclick="refreshInbox()" title="Refresh inbox" aria-label="Refresh inbox">
         <svg id="mobile-refresh-svg" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M23 4v6h-6"></path>
           <path d="M1 20v-6h6"></path>
           <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
         </svg>
       </button>
-      <button class="btn-copy-address" onclick="copyEmail()" title="Copy email">
+      <button class="btn-copy-address" id="mobile-header-copy-btn" onclick="copyEmail()" title="Copy temporary email address" aria-label="Copy temporary email address">
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
           <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
           <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
@@ -2343,6 +2844,12 @@
           <div class="brand-name">Temp<span>Drop</span></div>
           <div class="brand-badge">Disposable Mailbox</div>
         </div>
+        <button class="sidebar-mobile-close" onclick="toggleSidebar(false)" aria-label="Close sidebar menu" title="Close menu">
+          <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </button>
       </div>
 
       <!-- New Address Button -->
@@ -2474,6 +2981,72 @@
                 <path d="M18 6L7 17l-5-5"></path>
                 <path d="M22 10l-7.5 7.5L13 16"></path>
               </svg>
+            </button>
+          </div>
+        </div>
+
+        <!-- Mobile Active Mailbox Card (visible only on <= 768px) -->
+        <div class="mobile-mailbox-card" id="mobile-mailbox-card">
+          <div class="mobile-card-top">
+            <div class="mobile-card-badge">
+              <span class="pulse-dot"></span>
+              <span class="mobile-card-badge-text">ACTIVE MAILBOX</span>
+            </div>
+            <div class="mobile-card-expiry" title="Time remaining for this temporary address">
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"></circle>
+                <polyline points="12 6 12 12 16 14"></polyline>
+              </svg>
+              <span>Expires in</span>
+              <strong id="mobile-timer-val">--:--</strong>
+            </div>
+          </div>
+
+          <div class="mobile-card-address-row">
+            <div class="mobile-card-addr-box" onclick="copyEmail()" role="button" tabindex="0" title="Tap to copy temporary email address">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" class="mobile-addr-icon">
+                <circle cx="12" cy="12" r="4"></circle>
+                <path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.92 7.94"></path>
+              </svg>
+              <span class="dashboard-address-text mobile-addr-text" id="mobile-email-display">generating...</span>
+            </div>
+            <button class="mobile-card-copy-btn" id="mobile-copy-btn" onclick="copyEmail()" aria-label="Copy temporary email address">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+              </svg>
+              <span class="mobile-copy-text">Copy</span>
+            </button>
+          </div>
+
+          <!-- Progress bar -->
+          <div class="mobile-card-progress-track">
+            <div class="mobile-card-progress-fill" id="mobile-timer-bar"></div>
+          </div>
+
+          <!-- Mobile Quick Actions -->
+          <div class="mobile-card-actions">
+            <button class="mobile-card-action-btn" onclick="openUsernameModal()" title="Customize email username and domain">
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+              </svg>
+              <span>Change</span>
+            </button>
+            <button class="mobile-card-action-btn" onclick="newEmail()" title="Generate new random address">
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2">
+                <line x1="12" y1="5" x2="12" y2="19"></line>
+                <line x1="5" y1="12" x2="19" y2="12"></line>
+              </svg>
+              <span>New</span>
+            </button>
+            <button class="mobile-card-action-btn" onclick="refreshInbox()" title="Check for new incoming emails">
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M23 4v6h-6"></path>
+                <path d="M1 20v-6h6"></path>
+                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+              </svg>
+              <span>Refresh</span>
             </button>
           </div>
         </div>
@@ -2616,6 +3189,61 @@
     </main>
 
   </div>
+
+  <!-- MOBILE BOTTOM NAVIGATION (visible only on <= 768px) -->
+  <nav class="mobile-bottom-nav" id="mobile-bottom-nav" aria-label="Mobile Navigation">
+    <button class="mobile-nav-btn active" id="mob-nav-inbox" onclick="mobileNavSwitch('inbox')">
+      <div class="mobile-nav-icon-wrap">
+        <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="22 12 16 12 14 15 10 15 8 12 2 12"></polyline>
+          <path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"></path>
+        </svg>
+        <span class="mobile-nav-badge" id="mobile-nav-inbox-count" style="display:none;">0</span>
+      </div>
+      <span>Inbox</span>
+    </button>
+
+    <button class="mobile-nav-btn" id="mob-nav-starred" onclick="mobileNavSwitch('starred')">
+      <div class="mobile-nav-icon-wrap">
+        <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2">
+          <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon>
+        </svg>
+        <span class="mobile-nav-badge" id="mobile-nav-starred-count" style="display:none;">0</span>
+      </div>
+      <span>Starred</span>
+    </button>
+
+    <button class="mobile-nav-btn mobile-nav-center-action" onclick="newEmail()" title="Generate new address" aria-label="New address">
+      <div class="mobile-nav-fab">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.6">
+          <line x1="12" y1="5" x2="12" y2="19"></line>
+          <line x1="5" y1="12" x2="19" y2="12"></line>
+        </svg>
+      </div>
+      <span>New</span>
+    </button>
+
+    <button class="mobile-nav-btn" id="mob-nav-saved" onclick="mobileNavSwitch('saved')">
+      <div class="mobile-nav-icon-wrap">
+        <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path>
+        </svg>
+        <span class="mobile-nav-badge" id="mobile-nav-saved-count" style="display:none;">0</span>
+      </div>
+      <span>Saved</span>
+    </button>
+
+    <button class="mobile-nav-btn" id="mob-nav-menu" onclick="toggleSidebar(true)" aria-label="Open sidebar menu">
+      <div class="mobile-nav-icon-wrap">
+        <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="4" y1="7" x2="20" y2="7"></line>
+          <line x1="4" y1="12" x2="20" y2="12"></line>
+          <line x1="4" y1="17" x2="20" y2="17"></line>
+        </svg>
+      </div>
+      <span>Menu</span>
+    </button>
+  </nav>
 
   <!-- ====================================================================
        MODALS & DIALOGS
@@ -2888,7 +3516,7 @@
     function updateEmailDisplays(email) {
       const safeEmail = email || currentEmail || 'generating...';
       const targets = document.querySelectorAll(
-        '#dashboard-email-display, .dashboard-address-text, #email-display, .empty-card-addr, #empty-card-email-display, #sidebar-email-display'
+        '#dashboard-email-display, .dashboard-address-text, #email-display, .empty-card-addr, #empty-card-email-display, #sidebar-email-display, #mobile-email-display'
       );
       targets.forEach(el => {
         el.textContent = safeEmail;
@@ -2992,8 +3620,8 @@
         </div>`;
 
       renderEmailDetailEmpty();
-      document.querySelectorAll('#dashboard-timer-val, #timer-val, #sidebar-timer-val').forEach(el => el.textContent = '--:--');
-      document.querySelectorAll('#dashboard-timer-bar, #timer-bar').forEach(el => el.style.width = '100%');
+      document.querySelectorAll('#dashboard-timer-val, #timer-val, #sidebar-timer-val, #mobile-timer-val').forEach(el => el.textContent = '--:--');
+      document.querySelectorAll('#dashboard-timer-bar, #timer-bar, #mobile-timer-bar').forEach(el => el.style.width = '100%');
 
       await initEmail(true);
       showToast('New disposable address created!', 'success');
@@ -3160,6 +3788,7 @@
       const contentCol = document.getElementById('content-column');
       if (window.innerWidth <= 768) {
         contentCol.classList.add('open-on-mobile');
+        document.body.classList.add('mobile-detail-open');
       }
 
       // Render loading view in Column 3
@@ -3666,17 +4295,32 @@
         inboxBadge.textContent = unreadCount;
         inboxBadge.style.display = unreadCount > 0 ? 'inline-block' : 'none';
       }
+      const mobInboxBadge = document.getElementById('mobile-nav-inbox-count');
+      if (mobInboxBadge) {
+        mobInboxBadge.textContent = unreadCount;
+        mobInboxBadge.style.display = unreadCount > 0 ? 'inline-block' : 'none';
+      }
 
       const starBadge = document.getElementById('nav-starred-count');
       if (starBadge) {
         starBadge.textContent = starredCount;
         starBadge.style.display = starredCount > 0 ? 'inline-block' : 'none';
       }
+      const mobStarBadge = document.getElementById('mobile-nav-starred-count');
+      if (mobStarBadge) {
+        mobStarBadge.textContent = starredCount;
+        mobStarBadge.style.display = starredCount > 0 ? 'inline-block' : 'none';
+      }
 
       const saveBadge = document.getElementById('nav-saved-count');
       if (saveBadge) {
         saveBadge.textContent = savedCount;
         saveBadge.style.display = savedCount > 0 ? 'inline-block' : 'none';
+      }
+      const mobSaveBadge = document.getElementById('mobile-nav-saved-count');
+      if (mobSaveBadge) {
+        mobSaveBadge.textContent = savedCount;
+        mobSaveBadge.style.display = savedCount > 0 ? 'inline-block' : 'none';
       }
 
       const expBadge = document.getElementById('nav-expired-count');
@@ -3821,6 +4465,11 @@
       showToast('Email downloaded', 'success');
     }
 
+    function mobileNavSwitch(folder) {
+      closeEmailDetailMobile();
+      switchFolder(folder);
+    }
+
     /**
      * Switch folder view (inbox, starred, saved, expired)
      */
@@ -3831,6 +4480,12 @@
       });
       const activeBtn = document.getElementById('nav-' + folder);
       if (activeBtn) activeBtn.classList.add('active');
+
+      document.querySelectorAll('.mobile-nav-btn').forEach(btn => {
+        btn.classList.remove('active');
+      });
+      const activeMob = document.getElementById('mob-nav-' + folder);
+      if (activeMob) activeMob.classList.add('active');
 
       const titleMap = {
         inbox: 'Inbox',
@@ -3890,6 +4545,21 @@
             if (txt) txt.textContent = 'Copy';
           }, 2000);
         }
+        const mobBtn = document.getElementById('mobile-copy-btn');
+        if (mobBtn) {
+          mobBtn.classList.add('copied');
+          const txt = mobBtn.querySelector('.mobile-copy-text');
+          if (txt) txt.textContent = 'Copied!';
+          setTimeout(() => {
+            mobBtn.classList.remove('copied');
+            if (txt) txt.textContent = 'Copy';
+          }, 2000);
+        }
+        const hdrCopy = document.getElementById('mobile-header-copy-btn');
+        if (hdrCopy) {
+          hdrCopy.classList.add('copied');
+          setTimeout(() => hdrCopy.classList.remove('copied'), 2000);
+        }
         const btn = document.getElementById('copy-btn');
         if (btn) {
           btn.classList.add('copied');
@@ -3920,10 +4590,10 @@
       const timeStr = String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
       const percent = Math.max(0, Math.min(100, (left / totalDuration) * 100));
 
-      const timerEls = document.querySelectorAll('#dashboard-timer-val, #timer-val, #sidebar-timer-val');
+      const timerEls = document.querySelectorAll('#dashboard-timer-val, #timer-val, #sidebar-timer-val, #mobile-timer-val');
       timerEls.forEach(el => el.textContent = timeStr);
 
-      const barEls = document.querySelectorAll('#dashboard-timer-bar, #timer-bar');
+      const barEls = document.querySelectorAll('#dashboard-timer-bar, #timer-bar, #mobile-timer-bar');
       barEls.forEach(el => el.style.width = percent + '%');
     }
 
@@ -4044,7 +4714,8 @@
 
     function closeEmailDetailMobile() {
       const col = document.getElementById('content-column');
-      col.classList.remove('open-on-mobile');
+      if (col) col.classList.remove('open-on-mobile');
+      document.body.classList.remove('mobile-detail-open');
     }
 
     /**
