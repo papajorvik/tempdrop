@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 
 const MAILTM_BASE = 'https://api.mail.tm';
 const ALGORITHM = 'aes-256-gcm';
-const BUILD_VERSION = '2026-10-04-v4-diag';
+const BUILD_VERSION = '2026-10-04-v5-diagsuite';
 
 // Common HTTP headers for Mail.tm API requests
 const MAILTM_HEADERS = {
@@ -359,6 +359,34 @@ async function ensureSessionToken(session) {
 }
 
 /**
+ * Diagnostic probe helper for safe logging and recording without credentials.
+ */
+async function probeEndpoint(name, url, options = {}) {
+  try {
+    const res = await fetch(url, options);
+    const contentType = res.headers.get('content-type') || '(none)';
+    const text = await res.text();
+    return {
+      name,
+      url,
+      status: res.status,
+      contentType,
+      bodyLength: text.length,
+      bodyPreview: text.slice(0, 500)
+    };
+  } catch (err) {
+    return {
+      name,
+      url,
+      status: 'NETWORK_ERROR',
+      contentType: '(none)',
+      bodyLength: 0,
+      bodyPreview: err.message
+    };
+  }
+}
+
+/**
  * Main API Handler (Serverless & Node HTTP Server compatible)
  */
 export default async function handler(req, res) {
@@ -396,31 +424,73 @@ export default async function handler(req, res) {
     // Diagnostic Action: Inspect /domains directly
     // -------------------------------------------------------------
     if (action === 'diagnostic' || action === 'check_domains') {
-      const domainsUrl = `${MAILTM_BASE}/domains`;
-      const resProbe = await fetch(domainsUrl, {
+      const suiteResults = [];
+
+      const defaultHeaders = {
+        'Accept': 'application/ld+json, application/json;q=0.9, */*;q=0.8',
+        'User-Agent': MAILTM_HEADERS['User-Agent']
+      };
+
+      // 1. GET https://api.mail.tm/domains
+      suiteResults.push(await probeEndpoint('1. GET /domains', `${MAILTM_BASE}/domains`, {
+        headers: defaultHeaders
+      }));
+
+      // 2. GET https://api.mail.tm/domains?page=1
+      suiteResults.push(await probeEndpoint('2. GET /domains?page=1', `${MAILTM_BASE}/domains?page=1`, {
+        headers: defaultHeaders
+      }));
+
+      // 3. GET https://api.mail.tm/
+      suiteResults.push(await probeEndpoint('3. GET /', `${MAILTM_BASE}/`, {
+        headers: defaultHeaders
+      }));
+
+      // 4. GET https://api.mail.tm/messages
+      suiteResults.push(await probeEndpoint('4. GET /messages', `${MAILTM_BASE}/messages`, {
+        headers: defaultHeaders
+      }));
+
+      // 5. POST https://api.mail.tm/accounts with valid randomly generated account
+      const randSuffix = crypto.randomBytes(5).toString('hex');
+      const testUsername = `diag${randSuffix}`;
+      const testAddress = `${testUsername}@maxxspace.com`;
+      const testPassword = `Tmp${crypto.randomBytes(8).toString('hex')}A1!`;
+
+      suiteResults.push(await probeEndpoint('5. POST /accounts', `${MAILTM_BASE}/accounts`, {
+        method: 'POST',
         headers: {
+          'Content-Type': 'application/json',
           'Accept': 'application/ld+json, application/json;q=0.9, */*;q=0.8',
           'User-Agent': MAILTM_HEADERS['User-Agent']
-        }
-      });
-      const cType = resProbe.headers.get('content-type') || '(none)';
-      const bText = await resProbe.text();
+        },
+        body: JSON.stringify({ address: testAddress, password: testPassword })
+      }));
 
-      console.log('[Mail.tm /domains Diagnostic]', {
-        requestUrl: domainsUrl,
-        httpStatus: resProbe.status,
-        contentType: cType,
-        bodyLength: bText.length,
-        bodyPreview: bText.slice(0, 500)
-      });
+      // Header / network variations on /domains to isolate why /domains fails
+      suiteResults.push(await probeEndpoint('6. GET /domains (no custom headers)', `${MAILTM_BASE}/domains`));
+      suiteResults.push(await probeEndpoint('7. GET /domains (curl User-Agent)', `${MAILTM_BASE}/domains`, {
+        headers: { 'User-Agent': 'curl/8.4.0', 'Accept': '*/*' }
+      }));
+      suiteResults.push(await probeEndpoint('8. GET /domains (Accept: */*)', `${MAILTM_BASE}/domains`, {
+        headers: { 'Accept': '*/*', 'User-Agent': MAILTM_HEADERS['User-Agent'] }
+      }));
+      suiteResults.push(await probeEndpoint('9. GET /domains (Accept-Encoding: identity)', `${MAILTM_BASE}/domains`, {
+        headers: { ...defaultHeaders, 'Accept-Encoding': 'identity' }
+      }));
+
+      console.log('[Mail.tm Diagnostic Suite Results]', JSON.stringify(suiteResults.map(r => ({
+        name: r.name,
+        status: r.status,
+        contentType: r.contentType,
+        bodyLength: r.bodyLength,
+        bodyPreview: r.bodyPreview.slice(0, 100)
+      }))));
 
       return res.status(200).json({
         build: BUILD_VERSION,
-        requestUrl: domainsUrl,
-        httpStatus: resProbe.status,
-        contentType: cType,
-        bodyLength: bText.length,
-        bodyPreview: bText.slice(0, 500)
+        timestamp: new Date().toISOString(),
+        results: suiteResults
       });
     }
 
