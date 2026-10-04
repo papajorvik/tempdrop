@@ -3,6 +3,13 @@ import crypto from 'node:crypto';
 const MAILTM_BASE = 'https://api.mail.tm';
 const ALGORITHM = 'aes-256-gcm';
 
+// Common HTTP headers for Mail.tm API requests
+const MAILTM_HEADERS = {
+  'Content-Type': 'application/json',
+  'Accept': 'application/json',
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+};
+
 // Server-side session encryption key derived from environment variable
 const SESSION_SECRET = process.env.SESSION_SECRET || 'tempdrop-dev-fallback-secret-key-32b';
 const ENCRYPTION_KEY = crypto.createHash('sha256').update(SESSION_SECRET).digest();
@@ -14,6 +21,24 @@ const sessions = new Map();
 // Cached domains to minimize redundant network roundtrips
 let cachedDomains = [];
 let lastDomainsFetch = 0;
+
+/**
+ * Structured, sanitized error logger for Mail.tm API non-2xx responses.
+ * Strictly redacts password and token from all log output.
+ */
+function logMailtmError(method, url, status, responseBody, sanitizedPayload) {
+  const safePayload = sanitizedPayload ? { ...sanitizedPayload } : {};
+  if (safePayload.password) safePayload.password = '[REDACTED]';
+  if (safePayload.token) safePayload.token = '[REDACTED]';
+
+  console.error('[Mail.tm API Non-2xx Response]', {
+    method,
+    url,
+    status,
+    responseBody: responseBody ? responseBody.slice(0, 1000) : '(empty response body)',
+    sanitizedPayload: safePayload
+  });
+}
 
 /**
  * Seals session state into an authenticated, encrypted, tamper-proof token (AES-256-GCM)
@@ -128,23 +153,38 @@ function resolveSession(req, rawSid = '') {
 }
 
 /**
- * Fetch available active domains from official Mail.tm API:
+ * Fetch available active domains directly from official Mail.tm API:
  * GET https://api.mail.tm/domains
+ * Supports forceRefresh to bypass cache when creating new accounts.
  */
-async function getAvailableDomains() {
+async function getAvailableDomains(forceRefresh = false) {
   const now = Date.now();
-  if (cachedDomains.length > 0 && (now - lastDomainsFetch < 10 * 60 * 1000)) {
+  if (!forceRefresh && cachedDomains.length > 0 && (now - lastDomainsFetch < 60 * 1000)) {
     return cachedDomains;
   }
 
   try {
-    const res = await fetch(`${MAILTM_BASE}/domains`);
+    const res = await fetch(`${MAILTM_BASE}/domains`, {
+      headers: {
+        'Accept': 'application/json',
+        'User-Agent': MAILTM_HEADERS['User-Agent']
+      }
+    });
+
     if (!res.ok) {
-      throw new Error(`Mail.tm /domains returned HTTP ${res.status}`);
+      const errText = await res.text();
+      logMailtmError('GET', `${MAILTM_BASE}/domains`, res.status, errText, {});
+      throw new Error(`Mail.tm /domains returned HTTP ${res.status}: ${errText}`);
     }
+
     const data = await res.json();
-    const members = data['hydra:member'] || [];
-    const active = members.filter(d => d.isActive !== false).map(d => d.domain.toLowerCase());
+    // Handle both plain JSON array and hydra:member collection
+    const members = Array.isArray(data) ? data : (data['hydra:member'] || data.member || []);
+
+    // Filter strictly for active, non-private domains
+    const active = members
+      .filter(d => d.isActive !== false && d.isPrivate !== true)
+      .map(d => d.domain.toLowerCase().trim());
 
     if (active.length > 0) {
       cachedDomains = active;
@@ -153,14 +193,11 @@ async function getAvailableDomains() {
     }
   } catch (err) {
     console.error('Error fetching domains from Mail.tm:', err.message);
+    if (forceRefresh) throw err;
   }
 
-  return cachedDomains.length > 0 ? cachedDomains : ['maxxspace.com'];
-}
-
-async function getActiveDomain() {
-  const domains = await getAvailableDomains();
-  return domains[0];
+  if (cachedDomains.length > 0) return cachedDomains;
+  throw new Error('No active domains currently available from Mail.tm');
 }
 
 /**
@@ -182,16 +219,22 @@ function pruneExpiredSessions() {
 async function obtainAuthToken(address, password) {
   const res = await fetch(`${MAILTM_BASE}/token`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Accept': 'application/json'
-    },
+    headers: MAILTM_HEADERS,
     body: JSON.stringify({ address, password })
   });
 
   if (!res.ok) {
     const errText = await res.text();
-    throw new Error(`Mail.tm /token failed (${res.status}): ${errText}`);
+    const domain = address.includes('@') ? address.split('@')[1] : '';
+    logMailtmError('POST', `${MAILTM_BASE}/token`, res.status, errText, {
+      address,
+      domain
+    });
+    const error = new Error(`Mail.tm /token failed (${res.status}): ${errText}`);
+    error.status = res.status;
+    error.details = errText;
+    error.isMailtmError = true;
+    throw error;
   }
 
   return res.json();
@@ -204,18 +247,21 @@ async function obtainAuthToken(address, password) {
 async function createMailtmAccount(address, password) {
   const res = await fetch(`${MAILTM_BASE}/accounts`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Accept': 'application/json'
-    },
+    headers: MAILTM_HEADERS,
     body: JSON.stringify({ address, password })
   });
 
   if (!res.ok) {
     const errBody = await res.text();
-    const error = new Error(`Mail.tm /accounts failed (${res.status}): ${errBody}`);
+    const domain = address.includes('@') ? address.split('@')[1] : '';
+    logMailtmError('POST', `${MAILTM_BASE}/accounts`, res.status, errBody, {
+      address,
+      domain
+    });
+    const error = new Error(`Mail.tm /accounts failed (${res.status}): ${errBody || 'Internal Server Error'}`);
     error.status = res.status;
     error.details = errBody;
+    error.isMailtmError = true;
     throw error;
   }
 
@@ -285,13 +331,20 @@ export default async function handler(req, res) {
         }
       }
 
-      // Step 1: Fetch available Mail.tm domain
-      const domain = await getActiveDomain();
+      // Step 1: Force refresh active domains directly from GET /domains
+      const availableDomains = await getAvailableDomains(true);
+      if (!availableDomains || availableDomains.length === 0) {
+        return res.status(502).json({
+          error: 'Mail provider has no active domains available. Please try again later.'
+        });
+      }
+      const domain = availableDomains[0];
 
-      // Step 2: Generate unique address & secure password
-      const randSuffix = crypto.randomBytes(4).toString('hex');
-      const address = `td_${randSuffix}@${domain}`.toLowerCase();
-      const password = `Tmp!${crypto.randomBytes(8).toString('base64url')}9A#`;
+      // Step 2: Generate clean alphanumeric username [a-z0-9] and secure password
+      const randSuffix = crypto.randomBytes(5).toString('hex');
+      const username = `td${randSuffix}`.toLowerCase();
+      const address = `${username}@${domain}`;
+      const password = `Tmp${crypto.randomBytes(8).toString('hex')}A1!`;
 
       // Step 3: Create temporary account on Mail.tm
       let accountData;
@@ -299,7 +352,13 @@ export default async function handler(req, res) {
         accountData = await createMailtmAccount(address, password);
       } catch (err) {
         if (err.status === 429) {
-          return res.status(429).json({ error: 'Mail.tm rate limit reached. Please wait a moment and try again.' });
+          return res.status(429).json({ error: 'Mail provider rate limit reached. Please wait a moment and try again.' });
+        }
+        if (err.status >= 500) {
+          return res.status(502).json({
+            error: 'Mail provider temporarily unavailable. Please try again.',
+            details: err.details || null
+          });
         }
         throw err;
       }
@@ -346,18 +405,18 @@ export default async function handler(req, res) {
         return res.status(400).json({ error: 'Please provide a valid alphanumeric username' });
       }
 
-      // Validate selected domain against official Mail.tm active domains
-      const availableDomains = await getAvailableDomains();
+      // Validate selected domain against freshly verified active domains
+      const availableDomains = await getAvailableDomains(true);
       let domain = requestedDomain;
       if (!domain || !availableDomains.includes(domain)) {
         if (domain && !availableDomains.includes(domain)) {
-          return res.status(400).json({ error: `Domain @${domain} is not currently supported by Mail.tm` });
+          return res.status(400).json({ error: `Domain @${domain} is not currently supported or active on Mail.tm` });
         }
         domain = availableDomains[0];
       }
 
       const address = `${rawUser}@${domain}`;
-      const password = `Tmp!${crypto.randomBytes(8).toString('base64url')}9A#`;
+      const password = `Tmp${crypto.randomBytes(8).toString('hex')}A1!`;
 
       let accountData;
       try {
@@ -367,7 +426,13 @@ export default async function handler(req, res) {
           return res.status(422).json({ error: 'This username is already taken. Please choose another one.' });
         }
         if (err.status === 429) {
-          return res.status(429).json({ error: 'Mail.tm rate limit reached. Please wait a moment before trying again.' });
+          return res.status(429).json({ error: 'Mail provider rate limit reached. Please wait a moment before trying again.' });
+        }
+        if (err.status >= 500) {
+          return res.status(502).json({
+            error: 'Mail provider temporarily unavailable. Please try again.',
+            details: err.details || null
+          });
         }
         throw err;
       }
@@ -408,7 +473,8 @@ export default async function handler(req, res) {
       let msgRes = await fetch(`${MAILTM_BASE}/messages?page=1`, {
         headers: {
           'Authorization': `Bearer ${token}`,
-          'Accept': 'application/json'
+          'Accept': 'application/json',
+          'User-Agent': MAILTM_HEADERS['User-Agent']
         }
       });
 
@@ -425,17 +491,24 @@ export default async function handler(req, res) {
         msgRes = await fetch(`${MAILTM_BASE}/messages?page=1`, {
           headers: {
             'Authorization': `Bearer ${token}`,
-            'Accept': 'application/json'
+            'Accept': 'application/json',
+            'User-Agent': MAILTM_HEADERS['User-Agent']
           }
         });
       }
 
       if (!msgRes.ok) {
+        const errText = await msgRes.text();
+        logMailtmError('GET', `${MAILTM_BASE}/messages?page=1`, msgRes.status, errText, {
+          address: session.address,
+          domain: session.domain
+        });
         return res.status(msgRes.status).json({ error: 'Failed to fetch messages from Mail.tm', list: [] });
       }
 
       const msgData = await msgRes.json();
-      const members = msgData['hydra:member'] || [];
+      // Handle both plain JSON array and hydra:member collection
+      const members = Array.isArray(msgData) ? msgData : (msgData['hydra:member'] || msgData.member || []);
 
       // Map Mail.tm message schema to existing TempDrop UI format
       const list = members.map(m => {
@@ -473,7 +546,8 @@ export default async function handler(req, res) {
       let msgRes = await fetch(`${MAILTM_BASE}/messages/${emailId}`, {
         headers: {
           'Authorization': `Bearer ${token}`,
-          'Accept': 'application/json'
+          'Accept': 'application/json',
+          'User-Agent': MAILTM_HEADERS['User-Agent']
         }
       });
 
@@ -490,12 +564,18 @@ export default async function handler(req, res) {
         msgRes = await fetch(`${MAILTM_BASE}/messages/${emailId}`, {
           headers: {
             'Authorization': `Bearer ${token}`,
-            'Accept': 'application/json'
+            'Accept': 'application/json',
+            'User-Agent': MAILTM_HEADERS['User-Agent']
           }
         });
       }
 
       if (!msgRes.ok) {
+        const errText = await msgRes.text();
+        logMailtmError('GET', `${MAILTM_BASE}/messages/${emailId}`, msgRes.status, errText, {
+          address: session.address,
+          domain: session.domain
+        });
         return res.status(msgRes.status).json({ error: 'Failed to retrieve message details' });
       }
 
@@ -506,7 +586,8 @@ export default async function handler(req, res) {
         method: 'PATCH',
         headers: {
           'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/merge-patch+json'
+          'Content-Type': 'application/merge-patch+json',
+          'User-Agent': MAILTM_HEADERS['User-Agent']
         },
         body: JSON.stringify({ seen: true })
       }).catch(() => {});
@@ -547,7 +628,8 @@ export default async function handler(req, res) {
       await fetch(`${MAILTM_BASE}/messages/${emailId}`, {
         method: 'DELETE',
         headers: {
-          'Authorization': `Bearer ${token}`
+          'Authorization': `Bearer ${token}`,
+          'User-Agent': MAILTM_HEADERS['User-Agent']
         }
       });
 
@@ -558,7 +640,7 @@ export default async function handler(req, res) {
     // Action 6: Fetch available domains
     // -------------------------------------------------------------
     if (action === 'get_domains') {
-      const domains = await getAvailableDomains();
+      const domains = await getAvailableDomains(false);
       return res.status(200).json({
         domains: domains,
         activeDomain: domains[0]
@@ -567,7 +649,18 @@ export default async function handler(req, res) {
 
     return res.status(400).json({ error: `Unsupported action: ${action}` });
   } catch (err) {
-    console.error('Mail.tm proxy error:', err);
+    console.error('Mail.tm proxy error:', err.message);
+    if (err.status >= 500 || (err.message && err.message.includes('(500)'))) {
+      return res.status(502).json({
+        error: 'Mail provider temporarily unavailable. Please try again.',
+        details: err.details || null
+      });
+    }
+    if (err.status === 429) {
+      return res.status(429).json({
+        error: 'Mail provider rate limit reached. Please wait a moment and try again.'
+      });
+    }
     return res.status(err.status || 500).json({
       error: err.message || 'Internal proxy error',
       details: err.details || null
