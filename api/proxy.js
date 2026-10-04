@@ -1,8 +1,9 @@
 import crypto from 'node:crypto';
+import dns from 'node:dns/promises';
 
 const MAILTM_BASE = 'https://api.mail.tm';
 const ALGORITHM = 'aes-256-gcm';
-const BUILD_VERSION = '2026-10-04-v5-diagsuite';
+const BUILD_VERSION = '2026-10-04-v6-networkdiag';
 
 // Common HTTP headers for Mail.tm API requests
 const MAILTM_HEADERS = {
@@ -479,17 +480,51 @@ export default async function handler(req, res) {
         headers: { ...defaultHeaders, 'Accept-Encoding': 'identity' }
       }));
 
-      console.log('[Mail.tm Diagnostic Suite Results]', JSON.stringify(suiteResults.map(r => ({
-        name: r.name,
-        status: r.status,
-        contentType: r.contentType,
-        bodyLength: r.bodyLength,
-        bodyPreview: r.bodyPreview.slice(0, 100)
-      }))));
+      // Outbound Network & IP Diagnostics
+      let outboundIp = '(unknown)';
+      try {
+        const ipRes = await fetch('https://api.ipify.org?format=json').then(r => r.json());
+        outboundIp = ipRes.ip || '(unknown)';
+      } catch (e) {
+        outboundIp = `Error: ${e.message}`;
+      }
+
+      const resolvedIps4 = await dns.resolve4('api.mail.tm').catch(e => [e.message]);
+      const resolvedIps6 = await dns.resolve6('api.mail.tm').catch(e => [e.message]);
+
+      let outboundHeadersSeen = {};
+      try {
+        const binRes = await fetch('https://httpbin.org/headers', { headers: defaultHeaders }).then(r => r.json());
+        outboundHeadersSeen = binRes.headers || {};
+      } catch (e) {
+        outboundHeadersSeen = { error: e.message };
+      }
+
+      console.log('[Network Diagnostic]', {
+        outboundIp,
+        vercelRegion: process.env.VERCEL_REGION || '(none)',
+        awsRegion: process.env.AWS_REGION || '(none)',
+        incomingVercelId: req.headers?.['x-vercel-id'] || '(none)',
+        resolvedIps4,
+        resolvedIps6
+      });
 
       return res.status(200).json({
         build: BUILD_VERSION,
         timestamp: new Date().toISOString(),
+        network: {
+          outboundIp,
+          vercelRegion: process.env.VERCEL_REGION || '(none)',
+          awsRegion: process.env.AWS_REGION || '(none)',
+          incomingVercelId: req.headers?.['x-vercel-id'] || '(none)',
+          resolvedIps4,
+          resolvedIps6,
+          outboundHeadersSeen,
+          envProxy: {
+            HTTP_PROXY: process.env.HTTP_PROXY || null,
+            HTTPS_PROXY: process.env.HTTPS_PROXY || null
+          }
+        },
         results: suiteResults
       });
     }
