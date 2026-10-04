@@ -2,7 +2,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import handler from './api/proxy.js';
+import handler from './server/proxy.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -33,6 +33,12 @@ const PORT = process.env.PORT || 3000;
 
 const server = http.createServer(async (req, res) => {
   const reqUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+
+  // Health check endpoint for Render / Railway zero-downtime health monitors
+  if (reqUrl.pathname === '/health' || reqUrl.pathname === '/api/health') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({ status: 'ok', service: 'tempdrop-backend' }));
+  }
 
   // Route: /api/proxy or /api/proxy.js
   if (reqUrl.pathname === '/api/proxy' || reqUrl.pathname === '/api/proxy.js') {
@@ -106,6 +112,6 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, () => {
-  console.log(`TempDrop dev server running on http://localhost:${PORT}`);
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`TempDrop server running on http://0.0.0.0:${PORT}`);
 });

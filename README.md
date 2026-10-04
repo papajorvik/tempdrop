@@ -22,12 +22,12 @@ Instant anonymous temporary disposable email with a modern, high-density 3-colum
 
 ```
 tempdrop/
-├── index.html        ← Redesigned 3-column frontend
-├── api/
-│   └── proxy.js      ← Vercel serverless function (stateless Mail.tm backend proxy)
-├── server.js         ← Local development server (bridges static files & /api/proxy)
-├── package.json      ← Scripts & dependencies config
-├── vercel.json       ← Vercel routing configuration
+├── index.html        ← Modern 3-column disposable email frontend
+├── server/
+│   └── proxy.js      ← Stateless Mail.tm backend proxy & session manager
+├── server.js         ← Production Node.js HTTP server (binds 0.0.0.0, /health, /api/proxy)
+├── package.json      ← Scripts ("start": "node server.js") & engines config
+├── vercel.json       ← Vercel frontend rewrite configuration (routes /api/* to Render)
 ├── .env.example      ← Environment variable template
 └── .gitignore        ← Git ignore rules
 ```
@@ -44,11 +44,57 @@ tempdrop/
    ```
 3. Open [http://localhost:3000](http://localhost:3000) in your browser.
 
-## Deploying to Vercel
+---
 
-1. Push this repository to GitHub.
-2. Import the repository into [Vercel](https://vercel.com).
-3. In Project Settings → Environment Variables, add:
-   - `SESSION_SECRET`: A secure 32+ character random string (e.g. generated via `openssl rand -hex 32`)
-4. Deploy!
+## Deploying Backend to Render
+
+Deploy the persistent Node.js backend to [Render](https://render.com) so Mail.tm requests originate from reliable, non-blocked container IP pools.
+
+1. **Create Web Service**:
+   - Go to the [Render Dashboard](https://dashboard.render.com).
+   - Click **New +** → **Web Service**.
+   - Connect your GitHub repository (`papajorvik/tempdrop`).
+
+2. **Configure Settings**:
+   - **Name**: `tempdrop-backend` (or your preferred name)
+   - **Region**: Frankfurt (EU Central) or Oregon (US West)
+   - **Runtime**: `Node`
+   - **Branch**: `main`
+   - **Build Command**: *(leave empty or enter `npm install`)*
+   - **Start Command**: `node server.js` (or `npm start`)
+   - **Plan**: `Free`
+
+3. **Configure Environment Variables**:
+   In the **Environment Variables** section, add:
+   - `SESSION_SECRET`: Your 32+ byte hex key (e.g. `698113cd2c0c308eed46f238a62dd10e6016a4c0d848b44e5d7fded6e99eaf4d`)
+   - `NODE_ENV`: `production`
+
+4. **Configure Health Check Path**:
+   - Under **Advanced Settings** → **Health Check Path**, enter: `/health`
+
+5. **Deploy**:
+   - Click **Create Web Service**.
+   - Wait for deployment to complete.
+   - Verify by loading `https://<your-render-subdomain>.onrender.com/health` in your browser. You should see `{"status":"ok","service":"tempdrop-backend"}`.
+
+---
+
+## Connecting Vercel Frontend to Render Backend
+
+Once your Render service is live:
+
+1. Copy your Render service URL (e.g. `https://tempdrop-backend-xxxx.onrender.com`).
+2. Open `vercel.json` and replace `YOUR_RENDER_SERVICE_URL.onrender.com` with your actual Render service hostname:
+   ```json
+   {
+     "rewrites": [
+       {
+         "source": "/api/:match*",
+         "destination": "https://tempdrop-backend-xxxx.onrender.com/api/:match*"
+       }
+     ]
+   }
+   ```
+3. Commit and push `vercel.json` to GitHub `main`.
+4. Vercel automatically deploys the frontend update. All calls to `/api/proxy` on your Vercel site will now be transparently proxied to Render with first-party same-origin cookies and zero CORS restrictions!
 

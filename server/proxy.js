@@ -1,9 +1,7 @@
 import crypto from 'node:crypto';
-import dns from 'node:dns/promises';
 
 const MAILTM_BASE = 'https://api.mail.tm';
 const ALGORITHM = 'aes-256-gcm';
-const BUILD_VERSION = '2026-10-04-v6-networkdiag';
 
 // Common HTTP headers for Mail.tm API requests
 const MAILTM_HEADERS = {
@@ -16,8 +14,7 @@ const MAILTM_HEADERS = {
 const SESSION_SECRET = process.env.SESSION_SECRET || 'tempdrop-dev-fallback-secret-key-32b';
 const ENCRYPTION_KEY = crypto.createHash('sha256').update(SESSION_SECRET).digest();
 
-// In-memory cache for warm serverless execution & local development
-// sid -> { token, address, password, accountId, domain, createdAt, lastActive }
+// In-memory cache for warm execution (sid -> session)
 const sessions = new Map();
 
 // Cached domains to minimize redundant network roundtrips
@@ -100,12 +97,15 @@ function parseCookies(req) {
 }
 
 /**
- * Sets secure HttpOnly session cookie
+ * Sets secure HttpOnly session cookie.
+ * Supports x-forwarded-proto for reverse proxies (Render, Railway, etc.).
  */
 function setSessionCookie(res, token, req) {
   const host = (req?.headers?.host || '').toLowerCase();
   const isLocalhost = host.includes('localhost') || host.includes('127.0.0.1');
-  const isSecure = (process.env.NODE_ENV === 'production' || process.env.VERCEL === '1') && !isLocalhost;
+  const proto = (req?.headers?.['x-forwarded-proto'] || '').toLowerCase();
+  const isSecure = (process.env.NODE_ENV === 'production' || proto === 'https') && !isLocalhost;
+
   const cookieFlags = [
     `tempdrop_session=${encodeURIComponent(token)}`,
     'Path=/',
@@ -114,6 +114,7 @@ function setSessionCookie(res, token, req) {
     `Max-Age=${24 * 60 * 60}`,
     isSecure ? 'Secure' : ''
   ].filter(Boolean).join('; ');
+
   res.setHeader('Set-Cookie', cookieFlags);
 }
 
@@ -157,7 +158,7 @@ function resolveSession(req, rawSid = '') {
 /**
  * Fetch available active domains directly from official Mail.tm API:
  * GET https://api.mail.tm/domains
- * Supports forceRefresh to bypass cache when creating new accounts.
+ * Supports both Hydra collection ({ "hydra:member": [...] }) and plain JSON array ([...])
  */
 async function getAvailableDomains(forceRefresh = false) {
   const now = Date.now();
@@ -168,7 +169,6 @@ async function getAvailableDomains(forceRefresh = false) {
   const domainsUrl = `${MAILTM_BASE}/domains`;
   let res;
   let bodyText = '';
-  let contentType = '';
 
   try {
     res = await fetch(domainsUrl, {
@@ -178,72 +178,22 @@ async function getAvailableDomains(forceRefresh = false) {
       }
     });
 
-    contentType = res.headers.get('content-type') || '(none)';
     bodyText = await res.text();
-
-    // Required Diagnostic Logging: ONLY log requestUrl, httpStatus, contentType, bodyLength, bodyPreview
-    console.log('[Mail.tm /domains Diagnostic]', {
-      requestUrl: domainsUrl,
-      httpStatus: res.status,
-      contentType: contentType,
-      bodyLength: bodyText.length,
-      bodyPreview: bodyText.slice(0, 500)
-    });
   } catch (netErr) {
-    console.error('[Mail.tm /domains Network Error]', {
-      requestUrl: domainsUrl,
-      error: netErr.message
-    });
+    console.error('[Mail.tm /domains Network Error]', netErr.message);
+    if (cachedDomains.length > 0) return cachedDomains;
     throw netErr;
-  }
-
-  if (!res.ok && res.status >= 500) {
-    // Retry once after 600ms on 5xx
-    try {
-      await new Promise(r => setTimeout(r, 600));
-      const retryRes = await fetch(domainsUrl, {
-        headers: {
-          'Accept': 'application/ld+json, application/json;q=0.9, */*;q=0.8',
-          'User-Agent': MAILTM_HEADERS['User-Agent']
-        }
-      });
-      const retryType = retryRes.headers.get('content-type') || '(none)';
-      const retryBody = await retryRes.text();
-
-      console.log('[Mail.tm /domains Retry Diagnostic]', {
-        requestUrl: domainsUrl,
-        httpStatus: retryRes.status,
-        contentType: retryType,
-        bodyLength: retryBody.length,
-        bodyPreview: retryBody.slice(0, 500)
-      });
-
-      if (retryRes.ok) {
-        res = retryRes;
-        contentType = retryType;
-        bodyText = retryBody;
-      }
-    } catch (retryErr) {
-      console.error('[Mail.tm /domains Retry Network Error]', retryErr.message);
-    }
   }
 
   if (!res.ok) {
     if (cachedDomains.length > 0) {
-      console.warn(`[Mail.tm /domains HTTP ${res.status}] Fallback to cached active domains:`, cachedDomains);
+      console.warn(`[Mail.tm /domains HTTP ${res.status}] Fallback to cached domains:`, cachedDomains);
       return cachedDomains;
     }
     const error = new Error(`Mail.tm /domains returned HTTP ${res.status}: ${bodyText.slice(0, 500) || '(empty body)'}`);
     error.status = res.status;
     error.details = bodyText.slice(0, 500) || '(empty body)';
     error.isMailtmError = true;
-    error.diagnostic = {
-      requestUrl: domainsUrl,
-      httpStatus: res.status,
-      contentType: contentType,
-      bodyLength: bodyText.length,
-      bodyPreview: bodyText.slice(0, 500)
-    };
     throw error;
   }
 
@@ -251,14 +201,15 @@ async function getAvailableDomains(forceRefresh = false) {
   try {
     data = JSON.parse(bodyText);
   } catch (parseErr) {
-    console.error('Failed to parse Mail.tm /domains response as JSON:', parseErr.message, 'Raw body preview:', bodyText.slice(0, 500));
+    console.error('Failed to parse Mail.tm /domains response as JSON:', parseErr.message);
+    if (cachedDomains.length > 0) return cachedDomains;
     const error = new Error(`Failed to parse Mail.tm /domains JSON: ${parseErr.message}`);
     error.status = 502;
     error.details = bodyText.slice(0, 500);
     throw error;
   }
 
-  // Requirement 5: Support BOTH Hydra format ({ "hydra:member": [...] }) and plain array format ([...])
+  // Support BOTH Hydra format ({ "hydra:member": [...] }) and plain array format ([...])
   let members = [];
   if (Array.isArray(data)) {
     members = data;
@@ -277,6 +228,7 @@ async function getAvailableDomains(forceRefresh = false) {
     return cachedDomains;
   }
 
+  if (cachedDomains.length > 0) return cachedDomains;
   throw new Error('No active domains currently available from Mail.tm');
 }
 
@@ -360,40 +312,9 @@ async function ensureSessionToken(session) {
 }
 
 /**
- * Diagnostic probe helper for safe logging and recording without credentials.
- */
-async function probeEndpoint(name, url, options = {}) {
-  try {
-    const res = await fetch(url, options);
-    const contentType = res.headers.get('content-type') || '(none)';
-    const text = await res.text();
-    return {
-      name,
-      url,
-      status: res.status,
-      contentType,
-      bodyLength: text.length,
-      bodyPreview: text.slice(0, 500)
-    };
-  } catch (err) {
-    return {
-      name,
-      url,
-      status: 'NETWORK_ERROR',
-      contentType: '(none)',
-      bodyLength: 0,
-      bodyPreview: err.message
-    };
-  }
-}
-
-/**
- * Main API Handler (Serverless & Node HTTP Server compatible)
+ * Main API Handler
  */
 export default async function handler(req, res) {
-  // Identify build version in response headers
-  res.setHeader('X-TempDrop-Build', BUILD_VERSION);
-
   // CORS & credentials handling
   const origin = req.headers?.origin;
   if (origin) {
@@ -421,114 +342,6 @@ export default async function handler(req, res) {
   const sid = params.sid_token || params.sid || '';
 
   try {
-    // -------------------------------------------------------------
-    // Diagnostic Action: Inspect /domains directly
-    // -------------------------------------------------------------
-    if (action === 'diagnostic' || action === 'check_domains') {
-      const suiteResults = [];
-
-      const defaultHeaders = {
-        'Accept': 'application/ld+json, application/json;q=0.9, */*;q=0.8',
-        'User-Agent': MAILTM_HEADERS['User-Agent']
-      };
-
-      // 1. GET https://api.mail.tm/domains
-      suiteResults.push(await probeEndpoint('1. GET /domains', `${MAILTM_BASE}/domains`, {
-        headers: defaultHeaders
-      }));
-
-      // 2. GET https://api.mail.tm/domains?page=1
-      suiteResults.push(await probeEndpoint('2. GET /domains?page=1', `${MAILTM_BASE}/domains?page=1`, {
-        headers: defaultHeaders
-      }));
-
-      // 3. GET https://api.mail.tm/
-      suiteResults.push(await probeEndpoint('3. GET /', `${MAILTM_BASE}/`, {
-        headers: defaultHeaders
-      }));
-
-      // 4. GET https://api.mail.tm/messages
-      suiteResults.push(await probeEndpoint('4. GET /messages', `${MAILTM_BASE}/messages`, {
-        headers: defaultHeaders
-      }));
-
-      // 5. POST https://api.mail.tm/accounts with valid randomly generated account
-      const randSuffix = crypto.randomBytes(5).toString('hex');
-      const testUsername = `diag${randSuffix}`;
-      const testAddress = `${testUsername}@maxxspace.com`;
-      const testPassword = `Tmp${crypto.randomBytes(8).toString('hex')}A1!`;
-
-      suiteResults.push(await probeEndpoint('5. POST /accounts', `${MAILTM_BASE}/accounts`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/ld+json, application/json;q=0.9, */*;q=0.8',
-          'User-Agent': MAILTM_HEADERS['User-Agent']
-        },
-        body: JSON.stringify({ address: testAddress, password: testPassword })
-      }));
-
-      // Header / network variations on /domains to isolate why /domains fails
-      suiteResults.push(await probeEndpoint('6. GET /domains (no custom headers)', `${MAILTM_BASE}/domains`));
-      suiteResults.push(await probeEndpoint('7. GET /domains (curl User-Agent)', `${MAILTM_BASE}/domains`, {
-        headers: { 'User-Agent': 'curl/8.4.0', 'Accept': '*/*' }
-      }));
-      suiteResults.push(await probeEndpoint('8. GET /domains (Accept: */*)', `${MAILTM_BASE}/domains`, {
-        headers: { 'Accept': '*/*', 'User-Agent': MAILTM_HEADERS['User-Agent'] }
-      }));
-      suiteResults.push(await probeEndpoint('9. GET /domains (Accept-Encoding: identity)', `${MAILTM_BASE}/domains`, {
-        headers: { ...defaultHeaders, 'Accept-Encoding': 'identity' }
-      }));
-
-      // Outbound Network & IP Diagnostics
-      let outboundIp = '(unknown)';
-      try {
-        const ipRes = await fetch('https://api.ipify.org?format=json').then(r => r.json());
-        outboundIp = ipRes.ip || '(unknown)';
-      } catch (e) {
-        outboundIp = `Error: ${e.message}`;
-      }
-
-      const resolvedIps4 = await dns.resolve4('api.mail.tm').catch(e => [e.message]);
-      const resolvedIps6 = await dns.resolve6('api.mail.tm').catch(e => [e.message]);
-
-      let outboundHeadersSeen = {};
-      try {
-        const binRes = await fetch('https://httpbin.org/headers', { headers: defaultHeaders }).then(r => r.json());
-        outboundHeadersSeen = binRes.headers || {};
-      } catch (e) {
-        outboundHeadersSeen = { error: e.message };
-      }
-
-      console.log('[Network Diagnostic]', {
-        outboundIp,
-        vercelRegion: process.env.VERCEL_REGION || '(none)',
-        awsRegion: process.env.AWS_REGION || '(none)',
-        incomingVercelId: req.headers?.['x-vercel-id'] || '(none)',
-        resolvedIps4,
-        resolvedIps6
-      });
-
-      return res.status(200).json({
-        build: BUILD_VERSION,
-        timestamp: new Date().toISOString(),
-        network: {
-          outboundIp,
-          vercelRegion: process.env.VERCEL_REGION || '(none)',
-          awsRegion: process.env.AWS_REGION || '(none)',
-          incomingVercelId: req.headers?.['x-vercel-id'] || '(none)',
-          resolvedIps4,
-          resolvedIps6,
-          outboundHeadersSeen,
-          envProxy: {
-            HTTP_PROXY: process.env.HTTP_PROXY || null,
-            HTTPS_PROXY: process.env.HTTPS_PROXY || null
-          }
-        },
-        results: suiteResults
-      });
-    }
-
     // -------------------------------------------------------------
     // Action 1: Get or generate email address
     // -------------------------------------------------------------
@@ -558,17 +371,15 @@ export default async function handler(req, res) {
         if (err.status >= 500 || err.isMailtmError) {
           return res.status(502).json({
             error: 'Mail provider temporarily unavailable. Please try again.',
-            details: err.details || null,
-            diagnostic: err.diagnostic || null,
-            build: BUILD_VERSION
+            details: err.details || null
           });
         }
         throw err;
       }
+
       if (!availableDomains || availableDomains.length === 0) {
         return res.status(502).json({
-          error: 'Mail provider has no active domains available. Please try again later.',
-          build: BUILD_VERSION
+          error: 'Mail provider has no active domains available. Please try again later.'
         });
       }
       const domain = availableDomains[0];
@@ -590,8 +401,7 @@ export default async function handler(req, res) {
         if (err.status >= 500) {
           return res.status(502).json({
             error: 'Mail provider temporarily unavailable. Please try again.',
-            details: err.details || null,
-            diagnostic: err.diagnostic || null
+            details: err.details || null
           });
         }
         throw err;
@@ -647,13 +457,12 @@ export default async function handler(req, res) {
         if (err.status >= 500 || err.isMailtmError) {
           return res.status(502).json({
             error: 'Mail provider temporarily unavailable. Please try again.',
-            details: err.details || null,
-            diagnostic: err.diagnostic || null,
-            build: BUILD_VERSION
+            details: err.details || null
           });
         }
         throw err;
       }
+
       let domain = requestedDomain;
       if (!domain || !availableDomains.includes(domain)) {
         if (domain && !availableDomains.includes(domain)) {
@@ -678,8 +487,7 @@ export default async function handler(req, res) {
         if (err.status >= 500) {
           return res.status(502).json({
             error: 'Mail provider temporarily unavailable. Please try again.',
-            details: err.details || null,
-            diagnostic: err.diagnostic || null
+            details: err.details || null
           });
         }
         throw err;
@@ -904,9 +712,7 @@ export default async function handler(req, res) {
         ? 'Mail provider temporarily unavailable. Please try again.'
         : (err.message || 'Internal proxy error'),
       status: err.status || statusCode,
-      details: err.details || null,
-      diagnostic: err.diagnostic || null,
-      build: BUILD_VERSION
+      details: err.details || null
     });
   }
 }
